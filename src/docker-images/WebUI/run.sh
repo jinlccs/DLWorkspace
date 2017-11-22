@@ -5,6 +5,7 @@ rm --force Master-Templates.json
 ln -s /WebUI/Master-Templates.json .
 rm --force dashboardConfig.json
 ln -s /WebUI/dashboardConfig.json .
+ln -s /WebUI/hosting.json .
 
 dotnet restore
 dotnet run

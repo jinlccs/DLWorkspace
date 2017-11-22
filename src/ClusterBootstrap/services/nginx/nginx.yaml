@@ -1,14 +1,14 @@
 kind: DaemonSet
 apiVersion: extensions/v1beta1
 metadata:
-  name: webportal
+  name: nginx
   namespace: default
 spec:
   template:
     metadata:
-      name: webportal
+      name: nginx
       labels:
-        webportal-node: pod
+        nginx-node: pod
     spec:
       {% if cnf["dnsPolicy"] %}    
       dnsPolicy: {{cnf["dnsPolicy"]}}
@@ -17,8 +17,8 @@ spec:
         webportal: active
       hostNetwork: true        
       containers:
-      - name: webportal
-        image: {{cnf["worker-dockerregistry"]}}{{cnf["dockerprefix"]}}webui:{{cnf["dockertag"]}}
+      - name: nginx-proxy
+        image: {{cnf["worker-dockerregistry"]}}{{cnf["dockerprefix"]}}nginx:{{cnf["dockertag"]}}
         imagePullPolicy: Always
         volumeMounts:
         - mountPath: /WebUI

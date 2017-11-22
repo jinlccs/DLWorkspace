@@ -1867,9 +1867,13 @@ def deploy_webUI_on_node(ipAddress):
 	os.system("cp --verbose ./deploy/WebUI/userconfig.json ../WebUI/dotnet/WebPortal/") # used for debugging, when deploy, it will be overwritten by mount from host, contains secret
 	utils.render_template("./template/WebUI/configAuth.json","./deploy/WebUI/configAuth.json", config)
 	os.system("cp --verbose ./deploy/WebUI/configAuth.json ../WebUI/dotnet/WebPortal/")
-	
+	utils.render_template("./template/WebUI/hosting.json","./deploy/WebUI/hosting.json", config)
+	os.system("cp --verbose ./deploy/WebUI/hosting.json ../WebUI/dotnet/WebPortal/")
+
 	# write into host, mounted into container
 	utils.sudo_scp(config["ssh_cert"],"./deploy/WebUI/userconfig.json","/etc/WebUI/userconfig.json", sshUser, webUIIP )
+	utils.sudo_scp(config["ssh_cert"],"./deploy/WebUI/hosting.json","/etc/WebUI/hosting.json", sshUser, webUIIP )
+	utils.sudo_scp(config["ssh_cert"],"./deploy/WebUI/configAuth.json","/etc/WebUI/configAuth.json", sshUser, webUIIP )
 
 	# write report configuration
 	masternodes = get_ETCD_master_nodes(config["clusterId"])
