@@ -1,12 +1,12 @@
 kind: DaemonSet
 apiVersion: extensions/v1beta1
 metadata:
-  name: nginx
+  name: nginx-letsencrypt
   namespace: default
 spec:
   template:
     metadata:
-      name: nginx
+      name: nginx-letsencrypt
       labels:
         nginx-node: pod
     spec:
@@ -17,9 +17,12 @@ spec:
         webportal: active
       hostNetwork: true        
       containers:
-      - name: nginx-proxy
-        image: {{cnf["worker-dockerregistry"]}}{{cnf["dockerprefix"]}}nginx:{{cnf["dockertag"]}}
+      - name: nginx-letsencrypt
+        image: {{cnf["worker-dockerregistry"]}}{{cnf["dockerprefix"]}}nginx-letsencrypt:{{cnf["dockertag"]}}
         imagePullPolicy: Always
+        command: 
+        - /bin/sleep
+        - infinity
         volumeMounts:
         - mountPath: /tmp/docker.sock
           name: dockersock

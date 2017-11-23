@@ -136,7 +136,7 @@ default_config_parameters = {
 		"pxelinux.0": True, 
 		"main.html": True, 
 		"uploadFile.html": True, 
-		"docker-images/nginx-letsencrypt": True,
+		"docker-images/nginx": True,
 		# This template will be rendered inside container, but not at build stage
 		# "hdfs-site.xml.template": True, 		
 		},
@@ -582,6 +582,9 @@ scriptblocks = {
 		"kubernetes start jobmanager",
 		"kubernetes start restfulapi",
 		"kubernetes start webportal",
+		"kubernetes start monitor",
+  		"kubernetes start cloudmonitor",
+  		"kubernetes start logging",
 	],
 	"add_worker": [
 		"sshkey install",
