@@ -136,6 +136,7 @@ default_config_parameters = {
 		"pxelinux.0": True, 
 		"main.html": True, 
 		"uploadFile.html": True, 
+		"docker-images/nginx-letsencrypt": True,
 		# This template will be rendered inside container, but not at build stage
 		# "hdfs-site.xml.template": True, 		
 		},

@@ -30,13 +30,19 @@ verbose = False
 class StaticVariable():
 	rendered_target_directory = {}
 
+def in_template( basename, dic):
+	for (key, value) in dic.iteritems():
+		if basename.find(key)>=0:
+			return True
+	return False
+
 def render_template(template_file, target_file, config, verbose=False):
 	filename, file_extension = os.path.splitext(template_file)
 	basename = os.path.basename(template_file)
 	if ("render-exclude" in config and basename in config["render-exclude"] ):
 		# Don't render/copy the file. 
 		return
-	if ("render-by-copy-ext" in config and file_extension in config["render-by-copy-ext"]) or ("render-by-copy" in config and basename in config["render-by-copy"]):
+	if ("render-by-copy-ext" in config and file_extension in config["render-by-copy-ext"]) or ("render-by-copy" in config and in_template( template_file,config["render-by-copy"]) ):
 		copyfile(template_file, target_file)
 		if verbose:
 			print "Copy tempalte " + template_file + " --> " + target_file
