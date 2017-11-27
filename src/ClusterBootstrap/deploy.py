@@ -42,6 +42,9 @@ import launch_glusterfs
 import az_tools
 import acs_tools
 
+from params import default_config_parameters, scriptblocks
+
+
 capacityMatch = re.compile("\d+\.?\d*\s*[K|M|G|T|P]B")
 digitsMatch = re.compile("\d+\.?\d*")
 defanswer = ""
@@ -55,6 +58,7 @@ verbose = False
 nocache = False
 limitnodes = None
 
+<<<<<<< HEAD
 # These are the default configuration parameter
 default_config_parameters = {
 	# Kubernetes setting
@@ -645,6 +649,9 @@ scriptblocks = {
 		"restartwebui",
 	],
 }
+=======
+
+>>>>>>> 74656252b152d1d261fe67e2cf61a65a35f6ccbd
 
 # default search for all partitions of hdb, hdc, hdd, and sdb, sdc, sdd
 
@@ -3202,6 +3209,14 @@ def get_all_services():
 			launch_order_file = os.path.join( dirname, "launch_order")
 			if os.path.isfile( launch_order_file ):
 				servicedic[service] = launch_order_file
+				with open(launch_order_file,'r') as f:
+					allservices = f.readlines()
+					for filename in reversed(allservices):
+						filename = filename.strip()
+						filename = os.path.join(dirname, filename)
+						if os.path.isfile(filename):
+							servicedic[service+"/"+os.path.splitext(os.path.basename(filename))[0]] = filename
+
 			else:
 				yamlname = os.path.join(dirname, service + ".yaml")
 				if not os.path.isfile(yamlname):
@@ -3235,7 +3250,7 @@ def get_service_name(service_config_file):
 
 def get_service_yaml( use_service ):
 	servicedic = get_all_services()
-	# print	servicedic
+	#print	servicedic
 	newentries = {}
 	for service in servicedic:
 		servicename = get_service_name(servicedic[service])
@@ -3367,7 +3382,7 @@ def start_kube_service( servicename ):
 	fname = get_service_yaml( servicename )
 	# print "start service %s with %s" % (servicename, fname)
 	dirname = os.path.dirname(fname)
-	if os.path.exists(os.path.join(dirname,"launch_order")):
+	if os.path.exists(os.path.join(dirname,"launch_order")) and "/" not in servicename:
 		with open(os.path.join(dirname,"launch_order"),'r') as f:
 			allservices = f.readlines()
 			for filename in allservices:
@@ -3379,7 +3394,7 @@ def start_kube_service( servicename ):
 def stop_kube_service( servicename ):
 	fname = get_service_yaml( servicename )
 	dirname = os.path.dirname(fname)
-	if os.path.exists(os.path.join(dirname,"launch_order")):
+	if os.path.exists(os.path.join(dirname,"launch_order")) and "/" not in servicename:
 		with open(os.path.join(dirname,"launch_order"),'r') as f:
 			allservices = f.readlines()
 			for filename in reversed(allservices):
