@@ -58,7 +58,6 @@ verbose = False
 nocache = False
 limitnodes = None
 
-
 # default search for all partitions of hdb, hdc, hdd, and sdb, sdc, sdd
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
