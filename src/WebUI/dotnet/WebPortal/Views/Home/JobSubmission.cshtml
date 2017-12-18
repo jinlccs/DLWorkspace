@@ -139,6 +139,7 @@
                         }
                         else
                         {
+                            /*
                             var shareType = mountpoints[sharename].type;
                             var description = mountdescription[shareType];
                             var hostPath = "/dlwsdata" + onemount;
@@ -146,6 +147,7 @@
                             if (onemount == "jobfiles")
                                 containerPath = "/job";
                             mounts = mounts.concat({ "containerPath": containerPath, "hostPath": hostPath, "description": description, "enabled": true });
+                            */
                         }
                         if (onemount == "" || onemount == "work")
                         {
@@ -250,15 +252,20 @@
         $scope.setMounts = function () {
             if ($scope.current == null || $scope.mounts == null )
                 return;
-            if ($scope.current.mountpoints == null)
-                $scope.current.mountpoints = [];
+            var examinemounts = $scope.current.mountpoints;
+            if (examinemounts == null)
+                examinemounts = [];
+            $scope.current.mountpoints = []
             for (var i = 0; i < $scope.mounts.length - 1; i++)
             {
                 var onemount = $scope.mounts[i];
-                var selected = $filter('filter')($scope.current.mountpoints, { hostPath: onemount.hostPath });
+                var selected = $filter('filter')(examinemounts, { hostPath: onemount.hostPath });
                 if (selected.length <=0)
                 {
                     $scope.current.mountpoints.push(onemount);
+                }
+                else {
+                    $scope.current.mountpoints.push(selected[0]);
                 }
             }
         };
@@ -658,7 +665,7 @@
                 <a ng-if="showMounts" href="#" editable-text="current.dataPath">{{current.dataPath || "." }} </a>
 
                 <label ng-if="showMounts">
-                    Job Directory (empty by default) <br /> <font face="verdana" color="#A9A9A9"> This folder is mounted as <b>/job</b> inside container.</font>
+                    Job Directory (empty by default)  <font face="verdana" color="#A9A9A9"> This folder is mounted as <b>/job</b> inside container.</font>
                 </label>
                 <br ng-if="showMounts" />
                 <a ng-if="showMounts" href="#" editable-text="current.jobPath">{{current.jobPath || "(default_empty)" }} </a>
