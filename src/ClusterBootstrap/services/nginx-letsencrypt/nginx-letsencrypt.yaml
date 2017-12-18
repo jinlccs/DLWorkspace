@@ -22,7 +22,7 @@ spec:
         imagePullPolicy: Always
         command: 
         - /bin/sleep
-        - infinity
+        - "3600000"
         volumeMounts:
         - mountPath: /tmp/docker.sock
           name: dockersock

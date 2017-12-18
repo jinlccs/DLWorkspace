@@ -1,8 +1,6 @@
 FROM jwilder/nginx-proxy
 MAINTAINER Jin Li <jinlmsft@hotmail.com>
 
-<<<<<<< HEAD
-=======
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         cmake \
@@ -45,4 +43,3 @@ COPY default.conf /etc/nginx/conf.d/default.conf
 COPY nginx*.conf /etc/nginx/
 RUN chmod +x /home/auto-reload-nginx.sh
 RUN chmod +x /etc/nginx/conf.d/default.conf
->>>>>>> 7da9f8ff12a752b92e50eaf8896a32d515d66c36
