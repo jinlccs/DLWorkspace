@@ -116,7 +116,7 @@ def create_group():
 
 
 def create_storage_account(name, sku, location):
-    actual_location = get_location_string(location)
+    actual_location = get_region_string(location)
     actual_sku = get_sku( sku )
     print "name == %s, sku == %s, location == %s" %( name, actual_sku, actual_location)   
     if actual_location is not None:
@@ -135,6 +135,7 @@ def create_storage_account(name, sku, location):
             """ % (name, name)
         output2 = utils.exec_cmd_local(cmd2)
         print (output2)
+    return name
         
         # cmd3 = """gcloud compute url-maps add-path-matcher %s-public-rule --default-service web-map-backend-service \
         #    --path-matcher-name bucket-matcher \
@@ -144,7 +145,7 @@ def create_storage_account(name, sku, location):
         
 
 def delete_storage_account(name, sku, location):
-    actual_location = get_location_string(location)
+    actual_location = get_region_string(location)
     actual_sku = get_sku( sku )
     if actual_location is not None:
         print "name == %s, sku == %s, location == %s" %( name, actual_sku, actual_location)
@@ -164,6 +165,26 @@ def delete_storage_account(name, sku, location):
         #    """ % (name)
         # output3 = utils.exec_cmd_local(cmd3)
         
+def config_app_with_google( configApp, provider ):
+    locations = get_locations()
+    storages = utils.tolist( config["azure_cluster"]["storages"] ) 
+    if not ("Services" in configApp):
+        configApp["Services"] = {}
+    for location in locations:
+        actual_location = get_region_string(location)
+        if actual_location is not None:
+            for grp in ["cdn"]:
+                configGrp = config["azure_cluster"][grp]
+                storagename = configGrp["name"] + location
+                if not (location in configApp["Services"]):
+                    configApp["Services"][location] = {}
+                configAppGrp = configApp["Services"][location]
+                if not ("cdns" in configAppGrp):
+                    configAppGrp["cdns"] = {}
+                if provider not in configAppGrp["cdns"]:
+                    configAppGrp["cdns"][provider] = []
+                endpoint = "https://storage.googleapis.com/%s/" % storagename
+                configAppGrp["cdns"][provider].append ( endpoint )
     
 
 def open_all_port( vmname, location):
@@ -345,7 +366,7 @@ def delete_storage_with_config( configGrp, location ):
 
 def create_storage_group( locations, configGrp, docreate = True ):
     locations = get_locations()
-    # print "locations == %s" % locations
+    print "locations == %s" % locations
     for location in locations:
         create_storage_with_config( configGrp, location )
 
@@ -362,6 +383,19 @@ def create_storage( docreate = True ):
         create_storage_group( locations, configGrp, docreate )
     save_config()
 
+def add_storage_config( gsConfig ):
+    locations = get_locations()
+    storages = utils.tolist( config["azure_cluster"]["storages"] ) 
+    gsConfig["storage"] = {}
+    for grp in storages:
+        configGrp = config["azure_cluster"][grp]
+        for location in locations:
+            actual_location = get_region_string(location)
+            if actual_location is not None:
+                if grp not in gsConfig["storage"]:
+                    gsConfig["storage"][grp] = {}
+                storagename = configGrp["name"] + location
+                gsConfig["storage"][grp][location] = storagename
 
 def delete_storage( docreate = True ):
     locations = get_locations()
@@ -370,6 +404,41 @@ def delete_storage( docreate = True ):
         configGrp = config["azure_cluster"][grp]
         delete_storage_group( locations, configGrp, docreate )
     os.remove("gs_cluster_file.yaml")
+
+def create_service_accounts():
+    projectid = config["gs_cluster"]["project"]["id"]
+    output1 = utils.exec_cmd_local("gcloud iam service-accounts create administrator")
+    admin_account = "administrator@%s.iam.gserviceaccount.com" % projectid
+    print output1
+    output2 = utils.exec_cmd_local("""gcloud projects add-iam-policy-binding %s \
+        --member serviceAccount:%s \
+        --role roles/storage.admin """ % (projectid, admin_account))
+    print output2
+    output3 = utils.exec_cmd_local("""mkdir -p ./deploy/storage
+    gcloud iam service-accounts keys create ./deploy/storage/google_administrator.json \
+    --iam-account %s """ % (admin_account))
+    print output3
+
+    output5 = utils.exec_cmd_local("gcloud iam service-accounts create reader")
+    reader_account = "reader@%s.iam.gserviceaccount.com" % projectid
+    print output5
+    output6 = utils.exec_cmd_local("""gcloud projects add-iam-policy-binding %s \
+        --member serviceAccount:%s \
+        --role roles/storage.objectViewer """ % (projectid, reader_account) )
+    print output6
+    output7 = utils.exec_cmd_local("""gcloud iam service-accounts keys create ./deploy/storage/google_reader.json \
+    --iam-account %s """ % (reader_account))
+    print output7
+
+
+def delete_service_accounts():
+    projectid = config["gs_cluster"]["project"]["id"]
+    admin_account = "administrator@%s.iam.gserviceaccount.com" % projectid
+    output1 = utils.exec_cmd_local("gcloud iam service-accounts delete %s" % admin_account )
+    print output1
+    reader_account = "reader@%s.iam.gserviceaccount.com" % projectid
+    output2 = utils.exec_cmd_local("gcloud iam service-accounts delete %s" % reader_account )
+    print output2
 
 def create_vm( docreate = True):
     locations = get_locations()
@@ -447,7 +516,7 @@ def gen_cluster_config(output_file_name, output_file=True):
     return cc       
 
 def run_command( args, command, nargs, parser ):
-    bExecute = False
+    bExecute = True
     if command =="group" and len(nargs) >= 1:
         if nargs[0] == "create":
             print "At this moment, please create project from console. "
@@ -459,34 +528,44 @@ def run_command( args, command, nargs, parser ):
     if command == "storage":
         if nargs[0] == "create":
             create_storage()
-            bExecute = True
         elif nargs[0] == "delete":
             delete_storage()
-            bExecute = True
+        else:
+            bExecute = False
+    
+    elif command == "service-accounts":
+        if nargs[0] == "create":
+            create_service_accounts()
+        elif nargs[0] == "delete":
+            delete_service_accounts()
+        else:
+            bExecute = False
 
     elif command == "vm":
         if nargs[0] == "create":
             create_vm()
-            bExecute = True
         elif nargs[0] == "delete":
             delete_vm()
-            bExecute = True
         elif nargs[0] == "prepare":
             prepare_vm()
-            bExecute = True
-        
+        else:
+            bExecute = False
 
     elif command == "address":
         if nargs[0] == "create":
             create_address()
-        else:
+        elif nargs[0] == "delete":
             delete_address()
+        else:
+            bExecute = False
 
     elif command == "firewall":
         if nargs[0] == "create":
             create_firewall()
-        else:
+        elif nargs[0] == "delete":
             delete_firewall()
+        else:
+            bExecute = False
 
 
     elif command == "genconfig":
@@ -498,7 +577,13 @@ def run_command( args, command, nargs, parser ):
         if response == "DELETE":
             delete_vm()
             delete_storage()
+            delete_firewall()
 
+    else:
+        bExecute = False
+    
+    if not bExecute:
+        parser.print_help()
 
 if __name__ == '__main__':
     # the program always run at the current directory. 
@@ -511,9 +596,11 @@ if __name__ == '__main__':
 Create and manage GCP cluster.
 
 Command:
-    storage manage gcp storage bucket
-        create: create GCP Stroage
-        delete: delete GCP Storage
+    storage [create|delete] manage gcp storage bucket
+    vm [create|delete] manage gcp VM resource
+    address [create|delete] create/delete external static address for infrastructure VM
+    firewall [create|delete] create/delete firewall rules that attach to each VM
+    service-accounts [create|delete] create/delete service accounts to access storage
     genconfig Generate configuration files for Azure VM cluster. 
   ''') )
 
@@ -548,9 +635,9 @@ Command:
         if tmpconfig is not None and "cluster_name" in tmpconfig:
             config["gs_cluster"]["cluster_name"] = tmpconfig["cluster_name"]
         if tmpconfig is not None and "gs_cluster" in tmpconfig:
-            merge_config( config["gs_cluster"], tmpconfig["gs_cluster"][config["gs_cluster"]["cluster_name"]], verbose )
+            merge_config( config["gs_cluster"], tmpconfig["gs_cluster"] )
             
-        
+    # print config
     config = update_config(config)
     # print (config)
 
