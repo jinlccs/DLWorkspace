@@ -5,11 +5,11 @@ default_aws_parameters = {
         # Spell out regional location used in Google cloud platform, see
         # https://cloud.google.com/storage/docs/bucket-locations
         "location_mapping": {
-            "westus": "us-west1-c", 
+            "westus": "us-west-2", 
             "eastus": None, # or us-east4
         }, 
         "region_mapping": {
-            "westus": "us-west1", 
+            "westus": "us-west-2", 
             "eastus": None, # or us-east4
         }, 
         "sku_mapping": {

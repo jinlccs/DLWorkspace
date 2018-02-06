@@ -127,26 +127,22 @@ def create_group():
     print (output)
 
 
-def create_storage_account(name, sku, location):
+def create_storage_account(grp, name, sku, location):
     actual_location = get_region_string(location)
     actual_sku = get_sku( sku )
-    print "name == %s, sku == %s, location == %s" %( name, actual_sku, actual_location)   
     if actual_location is not None:
         print "name == %s, sku == %s, location == %s" %( name, actual_sku, actual_location)
         cmd = """
-        gsutil mb -c %s \
-                 -l %s \
-                 gs://%s """ \
-            % ( actual_sku, actual_location, name)
-        if verbose:
-            print(cmd)
+        aws s3 mb s3://%s \
+                 --region %s""" \
+            % ( name, actual_location)
         output = utils.exec_cmd_local(cmd)
-        print (output)
-        cmd2 = """ 
-            gcloud compute backend-buckets create %s-bucket --gcs-bucket-name %s --enable-cdn \
-            """ % (name, name)
-        output2 = utils.exec_cmd_local(cmd2)
-        print (output2)
+        if "storage" not in config["aws_cluster"]:
+            config["aws_cluster"]["storage"] = {}
+        if grp not in config["aws_cluster"]:
+            config["aws_cluster"]["storage"][grp] = {}
+        if location not in config["aws_cluster"]["storage"][grp]:
+            config["aws_cluster"]["storage"][grp][location] = { "bucket": name, "region": actual_location }
     return name
         
         # cmd3 = """gcloud compute url-maps add-path-matcher %s-public-rule --default-service web-map-backend-service \
@@ -162,41 +158,28 @@ def delete_storage_account(name, sku, location):
     if actual_location is not None:
         print "name == %s, sku == %s, location == %s" %( name, actual_sku, actual_location)
         cmd = """
-        gsutil rm -r gs://%s """ % ( name)
-        if verbose:
-            print(cmd)
+        aws s3 rb s3://%s --force""" % ( name)
         output = utils.exec_cmd_local(cmd)
         print (output)          
-        cmd2 = """ 
-            gcloud compute backend-buckets delete %s-bucket \
-            """ % (name)
-        output2 = utils.exec_cmd_local(cmd2)
-        print (output2)
-        # cmd3 = """ 
-        #    gcloud compute url-maps remove-path-matcher %s-public-rule \
-        #    """ % (name)
-        # output3 = utils.exec_cmd_local(cmd3)
         
-def config_app_with_google( configApp, provider ):
-    locations = get_locations()
-    storages = utils.tolist( config["azure_cluster"]["storages"] ) 
-    if not ("Services" in configApp):
-        configApp["Services"] = {}
-    for location in locations:
-        actual_location = get_region_string(location)
-        if actual_location is not None:
-            for grp in ["cdn"]:
-                configGrp = config["azure_cluster"][grp]
-                storagename = configGrp["name"] + location
-                if not (location in configApp["Services"]):
-                    configApp["Services"][location] = {}
-                configAppGrp = configApp["Services"][location]
-                if not ("cdns" in configAppGrp):
-                    configAppGrp["cdns"] = {}
-                if provider not in configAppGrp["cdns"]:
-                    configAppGrp["cdns"][provider] = []
-                endpoint = "https://storage.googleapis.com/%s/" % storagename
-                configAppGrp["cdns"][provider].append ( endpoint )
+def config_app_with_aws( configApp, config, provider ):
+    if "aws_cluster" in config and "storage" in config["aws_cluster"]:
+        storageConfig = config["aws_cluster"]["storage"]
+        if not ("Services" in configApp):
+            configApp["Services"] = {}
+        for (grp, grpConfig) in storageConfig.iteritems():
+            if grp == "cdn":
+                for (location, configGrp) in grpConfig.iteritems():
+                        storagename = configGrp["bucket"]
+                        if not (location in configApp["Services"]):
+                            configApp["Services"][location] = {}
+                        configAppGrp = configApp["Services"][location]
+                        if not ("cdns" in configAppGrp):
+                            configAppGrp["cdns"] = {}
+                        if provider not in configAppGrp["cdns"]:
+                            configAppGrp["cdns"][provider] = []
+                        endpoint = "https://%s.s3.amazonaws.com/" % storagename
+                        configAppGrp["cdns"][provider].append ( endpoint )
     
 
 def open_all_port( vmname, location):
@@ -294,7 +277,8 @@ def delete_aws_vm( vmname, vmsize, location, configCluster, docreate):
                 % ( instanceid )
         output = utils.exec_cmd_local(cmd)
         print (output)  
-        del config["aws_cluster"][location][vmname]
+        if "error" not in output:
+            del config["aws_cluster"][location][vmname]
        
 
 def create_vm_cluster(location, configCluster, docreate):
@@ -434,9 +418,9 @@ def delete_address():
     save_config()
 
 
-def create_storage_with_config( configGrp, location ):
+def create_storage_with_config( grp, configGrp, location ):
     storagename = configGrp["name"] + location
-    output = create_storage_account( storagename, configGrp["sku"], location)
+    output = create_storage_account( grp, storagename, configGrp["sku"], location)
     if verbose: 
         print ( "Storage account %s" % output )
     if False:
@@ -455,11 +439,11 @@ def delete_storage_with_config( configGrp, location ):
     storagename = configGrp["name"] + location
     output = delete_storage_account( storagename, configGrp["sku"], location)
 
-def create_storage_group( locations, configGrp, docreate = True ):
+def create_storage_group( grp, locations, configGrp, docreate = True ):
     locations = get_locations()
     print "locations == %s" % locations
     for location in locations:
-        create_storage_with_config( configGrp, location )
+        create_storage_with_config( grp, configGrp, location )
 
 def delete_storage_group( locations, configGrp, docreate = True ):
     locations = get_locations()
@@ -471,7 +455,7 @@ def create_storage( docreate = True ):
     storages = utils.tolist( config["azure_cluster"]["storages"] ) 
     for grp in storages:
         configGrp = config["azure_cluster"][grp]
-        create_storage_group( locations, configGrp, docreate )
+        create_storage_group( grp, locations, configGrp, docreate )
     save_config()
 
 def add_storage_config( gsConfig ):
@@ -497,39 +481,31 @@ def delete_storage( docreate = True ):
     os.remove("gs_cluster_file.yaml")
 
 def create_service_accounts():
-    projectid = config["gs_cluster"]["project"]["id"]
-    output1 = utils.exec_cmd_local("gcloud iam service-accounts create administrator")
-    admin_account = "administrator@%s.iam.gserviceaccount.com" % projectid
-    print output1
-    output2 = utils.exec_cmd_local("""gcloud projects add-iam-policy-binding %s \
-        --member serviceAccount:%s \
-        --role roles/storage.admin """ % (projectid, admin_account))
+    cmd = """ \
+        aws iam create-user --user-name S3Access
+        aws iam attach-user-policy --user-name S3Access --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
+        """
+    output1 = utils.exec_cmd_local( cmd )
+    cmd1 = "aws iam create-access-key --user-name S3Access"
+    output2 = utils.exec_cmd_local( cmd1 )
     print output2
-    output3 = utils.exec_cmd_local("""mkdir -p ./deploy/storage
-    gcloud iam service-accounts keys create ./deploy/storage/google_administrator.json \
-    --iam-account %s """ % (admin_account))
-    print output3
-
-    output5 = utils.exec_cmd_local("gcloud iam service-accounts create reader")
-    reader_account = "reader@%s.iam.gserviceaccount.com" % projectid
-    print output5
-    output6 = utils.exec_cmd_local("""gcloud projects add-iam-policy-binding %s \
-        --member serviceAccount:%s \
-        --role roles/storage.objectViewer """ % (projectid, reader_account) )
-    print output6
-    output7 = utils.exec_cmd_local("""gcloud iam service-accounts keys create ./deploy/storage/google_reader.json \
-    --iam-account %s """ % (reader_account))
-    print output7
-
+    jsonkey = json.loads(output2)
+    config["aws_cluster"]["AccessKey"] = jsonkey["AccessKey"]
+    save_config()
 
 def delete_service_accounts():
-    projectid = config["gs_cluster"]["project"]["id"]
-    admin_account = "administrator@%s.iam.gserviceaccount.com" % projectid
-    output1 = utils.exec_cmd_local("gcloud iam service-accounts delete %s" % admin_account )
-    print output1
-    reader_account = "reader@%s.iam.gserviceaccount.com" % projectid
-    output2 = utils.exec_cmd_local("gcloud iam service-accounts delete %s" % reader_account )
-    print output2
+    if "AccessKey" in config["aws_cluster"]:
+        keyid = config["aws_cluster"]["AccessKey"]["AccessKeyId"]
+        cmd1 = "aws iam delete-access-key --user-name S3Access --access-key-id %s" % keyid
+        output2 = utils.exec_cmd_local( cmd1 )    
+    cmd = """aws iam detach-user-policy --user-name S3Access --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess 
+    aws iam delete-user --user-name S3Access"""
+    output1 = utils.exec_cmd_local( cmd )
+    if "error" in output1:
+        return
+    if "AccessKey" in config["aws_cluster"]:
+        del config["aws_cluster"]["AccessKey"]
+        save_config()
 
 def create_vm( docreate = True):
     locations = get_vm_locations()
