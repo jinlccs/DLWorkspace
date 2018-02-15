@@ -21,19 +21,23 @@ import numbers
 from os.path import expanduser
 
 import yaml
+import json
 from jinja2 import Environment, FileSystemLoader, Template
 import base64
 import tempfile
+import urlparse
 
 from shutil import copyfile, copytree
 import urllib
 import socket
+sys.path.append("utils")
 import utils
-from az_params import *
+from utils import tolist
 
 verbose = False
 
-# These are the default configuration parameter
+from az_params import *
+
 
 
 def init_config():
@@ -58,6 +62,7 @@ def merge_config( config1, config2, verbose ):
                 print ("Entry %s == %s " % (entry, config2[entry] ) )
             config1[entry] = config2[entry]
 
+# resource_group_name is cluster_name + ResGrp
 def update_config(config, genSSH=True):
     config["azure_cluster"]["resource_group_name"] = config["azure_cluster"]["cluster_name"]+"ResGrp"
     config["azure_cluster"]["vnet_name"] = config["azure_cluster"]["cluster_name"]+"-VNet"
@@ -90,6 +95,7 @@ def update_config(config, genSSH=True):
 
 def create_vm(vmname, bIsWorker):
     vm_size = config["azure_cluster"]["worker_vm_size"] if bIsWorker else config["azure_cluster"]["infra_vm_size"]
+    actual_location = get_location_string( config["azure_cluster"]["azure_location"])
     cmd = """
         az vm create --resource-group %s \
                  --name %s \
@@ -109,7 +115,7 @@ def create_vm(vmname, bIsWorker):
                vmname,
                config["azure_cluster"]["vm_image"],
                vmname,
-               config["azure_cluster"]["azure_location"],
+               actual_location,
                vm_size,
                config["azure_cluster"]["vnet_name"],
                config["azure_cluster"]["nsg_name"],
@@ -122,9 +128,11 @@ def create_vm(vmname, bIsWorker):
     print (output)
 
 def create_group():
+    locations = tolist(config["azure_cluster"]["azure_location"])
+    actual_location = get_location_string(locations[0] )
     cmd = """
         az group create --name %s --location %s 
-        """ % (config["azure_cluster"]["resource_group_name"],config["azure_cluster"]["azure_location"])
+        """ % (config["azure_cluster"]["resource_group_name"],actual_location)
     if verbose:
         print(cmd)
     output = utils.exec_cmd_local(cmd)
@@ -132,6 +140,7 @@ def create_group():
 
 
 def create_sql():
+    actual_location = get_location_string( config["azure_cluster"]["azure_location"] )
     cmd = """
         az sql server create --resource-group %s \
                  --location %s \
@@ -139,7 +148,7 @@ def create_sql():
                  -u %s \
                  -p %s
         """ % (config["azure_cluster"]["resource_group_name"],
-               config["azure_cluster"]["azure_location"],
+               actual_location,
                config["azure_cluster"]["sql_server_name"],
                config["azure_cluster"]["sql_admin_name"],
                config["azure_cluster"]["sql_admin_password"])
@@ -163,22 +172,217 @@ def create_sql():
     output = utils.exec_cmd_local(cmd)
     print (output)
 
+def get_location_string( location ):
+    if "az_location_mapping" in config and location in config["az_location_mapping"]:
+        return config["az_location_mapping"][location]
+    else:
+        return location
 
-def create_storage_account():
+
+def create_storage_account(name, sku, location):
+    actual_location = get_location_string(location)
     cmd = """
         az storage account create \
             --name %s \
             --sku %s \
             --resource-group %s \
             --location %s 
-        """ % (config["azure_cluster"]["storage_account_name"],
-               config["azure_cluster"]["vm_storage_sku"],
+        """ % (name,
+               sku,
                config["azure_cluster"]["resource_group_name"],
-               config["azure_cluster"]["azure_location"])
+               actual_location)
+    if verbose:
+        print(cmd)
+    output = utils.exec_cmd_local(cmd)
+    return output
+
+def get_storage_keys( configGrp, location):
+    cmd = """
+        az storage account keys list \
+            --account-name %s \
+            --resource-group %s \
+        """ % (configGrp[location]["fullname"],
+               config["azure_cluster"]["resource_group_name"])
+    if verbose:
+        print(cmd)
+    output = utils.exec_cmd_local(cmd)
+    return output
+
+def create_storage_container( location, name, configGrp, configContainer ):
+    cmd = """
+        az storage container create \
+            --name %s \
+            --account-key %s \
+            --account-name %s \
+        """ % ( name, configGrp[location]["keys"][0]["value"], configGrp[location]["fullname"] )
+    if "public-access" in configContainer:
+        cmd += " --public-access %s" % configContainer["public-access"]
+    if verbose:
+        print(cmd)
+    output = utils.exec_cmd_local(cmd)
+    return output
+
+def add_cors( configGrp, location ):
+    cmd = """
+        az storage cors add \
+            --method %s \
+            --origins "*" \
+            --services b \
+            --allowed-headers "*" \
+            --exposed-headers "*" \
+            --max-age 200 \
+            --timeout 200 \
+            --account-key %s \
+            --account-name %s \
+        """ % ( configGrp["cors"], configGrp[location]["keys"][0]["value"], configGrp[location]["fullname"] )
+    if verbose:
+        print(cmd)
+    output = utils.exec_cmd_local(cmd)
+    return output
+
+def create_storage_containers( configGrp, location ):
+    if "containers" in configGrp:
+        for name in configGrp["containers"]:
+            configContainer = configGrp["containers"][name]
+            create_storage_container( location, name, configGrp, configContainer )
+
+def create_storage_with_config( configGrp, location ):
+    storagename = configGrp["name"] + location
+    output = create_storage_account( storagename, configGrp["sku"], location)
+    if verbose: 
+        print ( "Storage account %s" % output )
+    configGrp[location] = json.loads( output )
+    configGrp[location]["fullname"] = storagename
+    output = get_storage_keys( configGrp, location )
+    if verbose: 
+        print ( "Storage keys %s" % output )   
+    keyConfig = json.loads( output )
+    configGrp[location]["keys"] = keyConfig
+    create_storage_containers( configGrp, location )
+    if "cors" in configGrp and configGrp["cors"]: 
+        add_cors(configGrp, location)
+
+# Fill in configuration with information on azure. 
+def config_app_with_azure( configApp, azureConfig, provider ):
+    locations = tolist( azureConfig["azure_cluster"]["azure_location"])
+    if not ("Services" in configApp):
+        configApp["Services"] = {}
+    for location in locations:
+        configGrp = azureConfig["azure_cluster"]["cdn"][location]
+        if not (location in configApp["Services"]):
+            configApp["Services"][location] = {}
+        configAppGrp = configApp["Services"][location]
+        if not ("cdns" in configAppGrp):
+            configAppGrp["cdns"] = {}
+        if provider not in configAppGrp["cdns"]:
+            configAppGrp["cdns"][provider] = []
+        if "primaryEndpoints" in configGrp and "blob" in configGrp["primaryEndpoints"]:
+            configAppGrp["cdns"][provider].append ( configGrp["primaryEndpoints"]["blob"] )
+        if "secondaryEndpoints" in configGrp and "blob" in configGrp["secondaryEndpoints"]:
+            configAppGrp["cdns"][provider].append ( configGrp["secondaryEndpoints"]["blob"] )
+
+# Fill in configuration with related to order server on azure. 
+def config_order_with_azure( configOrder, azureConfig ):
+    ()
+
+def create_cdn_profile(name, sku, location):
+    actual_location = get_location_string(location)
+    cmd = """
+        az cdn profile create \
+            --name %s \
+            --sku %s \
+            --resource-group %s \
+            --location %s 
+        """ % (name,
+               sku,
+               config["azure_cluster"]["resource_group_name"],
+               actual_location)
     if verbose:
         print(cmd)
     output = utils.exec_cmd_local(cmd)
     print (output)
+
+def create_cdn_endpoint(name, origin, profilename):
+    cmd = """
+        az cdn endpoint create \
+            --name %s \
+            --origin %s \
+            --profile-name %s \
+            --resource-group %s 
+        """ % (name,
+               origin,
+               profilename, 
+               config["azure_cluster"]["resource_group_name"] )
+    if verbose:
+        print(cmd)
+    output = utils.exec_cmd_local(cmd)
+    if verbose:
+        print (output)
+    return (output)
+
+def create_cdn_endpoint_with_config( cdnconfig, location):
+    curConfig = cdnconfig[location] 
+    if verbose:
+        print yaml.safe_dump( curConfig, default_flow_style=False )
+    curConfig["cdnprofile"] = cdnconfig["name"] + "profile" + location
+    create_cdn_profile( curConfig["cdnprofile"], cdnconfig["cdnsku"], location)
+    curConfig["cdnendpoint"] = cdnconfig["fullname"]
+    primaryEndpoints = curConfig["primaryEndpoints"]
+    blobendpoint = primaryEndpoints["blob"]
+    parsed = urlparse.urlparse( blobendpoint )
+    curConfig["cdnorigin"] = parsed.netloc
+    output = create_cdn_endpoint( curConfig["cdnendpoint"], curConfig["cdnorigin"], curConfig["cdnprofile"], )
+    curConfig["cdnconfig"] = json.loads( output )
+
+def create_storage_group( locations, configGrp, docreate = True ):
+    locations = tolist( config["azure_cluster"]["azure_location"])
+    for location in locations:
+        create_storage_with_config( configGrp, location )
+
+def create_storage( docreate = True ):
+    locations = tolist( config["azure_cluster"]["azure_location"])
+    storages = tolist( config["azure_cluster"]["storages"] ) 
+    for grp in storages:
+        configGrp = config["azure_cluster"][grp]
+        create_storage_group( locations, configGrp, docreate )
+    cdnconfig = config["azure_cluster"]["cdn"]
+    for location in locations:
+        ()
+        # disable CDN
+        # create_cdn_endpoint_with_config( cdnconfig, location )
+    with open("azure_cluster_file.yaml", "w") as outfile:
+        yaml.safe_dump( config, outfile, default_flow_style=False)
+
+def use_storage( args ):
+    if len( args ) <= 0:
+        print "Need storage group parameter"       
+        return
+    if args[0] in config["azure_cluster"]:
+        configGrp = config["azure_cluster"][args[0]]
+        use_storage_grp( configGrp, args[1:])
+    else:
+        print "There is no storage group %s" %args[0]
+        print config["azure_cluster"]
+
+def use_storage_grp( configGrp, args):
+    if len( args ) <= 0:
+        print "Need storage location parameter"
+        return
+    if args[0] in configGrp:
+        configStorage = configGrp[args[0]]
+        use_storage_loc( configStorage, args[1:])
+    else:
+        print "There is no storage location %s" %args[0]
+        print configGrp
+
+def use_storage_loc( configStorage, args):
+    storagename = configStorage["fullname"]
+    key = configStorage["keys"][0]["value"]
+    os.environ["AZURE_STORAGE_KEY"] = key
+    os.environ["AZURE_STORAGE_ACCOUNT"] = storagename
+    print "Type the following ...."
+    print( "export AZURE_STORAGE_KEY=%s" %key )
+    print( "export AZURE_STORAGE_ACCOUNT=%s" %storagename)
 
 def create_file_share():
     cmd = """
@@ -236,24 +440,9 @@ def create_nsg():
         az network nsg rule create \
             --resource-group %s \
             --nsg-name %s \
-            --name allowalltcp \
+            --name allowall \
             --protocol tcp \
             --priority 1000 \
-            --destination-port-range 0-65535 \
-            --access allow
-        """ %( config["azure_cluster"]["resource_group_name"],
-               config["azure_cluster"]["nsg_name"])
-    output = utils.exec_cmd_local(cmd)
-    print (output)
-
-
-    cmd = """
-        az network nsg rule create \
-            --resource-group %s \
-            --nsg-name %s \
-            --name allowalludp \
-            --protocol udp \
-            --priority 1010 \
             --destination-port-range 0-65535 \
             --access allow
         """ %( config["azure_cluster"]["resource_group_name"],
@@ -369,7 +558,7 @@ def delete_cluster():
     if response == "DELETE":
         delete_group()
 
-def run_command( args, command, nargs, parser ):
+def run_command_old( args, command, nargs, parser ):
     if command =="create":
         create_cluster()
 
@@ -379,12 +568,29 @@ def run_command( args, command, nargs, parser ):
     elif command == "genconfig":
         gen_cluster_config("cluster.yaml")
 
+def run_command( args, command, nargs, parser ):
+    if command =="group" and len(nargs) >= 1:
+        if nargs[0] == "create":
+            create_group()
+
+        elif nargs[0] == "delete":
+            delete_group()
+
+    if command == "storage":
+        if nargs[0] == "create":
+            create_storage()
+        elif nargs[0] == "use":
+            use_storage( nargs[1:])
+
+    elif command == "genconfig":
+        () # gen_cluster_config("cluster.yaml")
+
 if __name__ == '__main__':
     # the program always run at the current directory. 
     dirpath = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
     # print "Directory: " + dirpath
     os.chdir(dirpath)
-    parser = argparse.ArgumentParser( prog='az_utils.py',
+    parser = argparse.ArgumentParser( prog='az_tools.py',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent('''\
 Create and manage a Azure VM cluster.
@@ -393,78 +599,20 @@ Prerequest:
 * Create config.yaml according to instruction in docs/deployment/azure/configure.md.
 
 Command:
-  create Create an Azure VM cluster based on the parameters in config file. 
+  group [manage azure resource group.]
+    create: create azure resource group
+    delete: delete azure resource group
+  storage [manage azure storage account. ]
+    create: create azure storage account.
+    use: [type] [loc] use a certain azure storage. 
   delete Delete the Azure VM cluster. 
   genconfig Generate configuration files for Azure VM cluster. 
   ''') )
-    parser.add_argument("--cluster_name", 
-        help = "Specify a cluster name", 
-        action="store", 
-        default=None)        
-
-    parser.add_argument("--infra_node_num", 
-        help = "Specify the number of infra nodes, default = " + str(default_config_parameters["azure_cluster"]["infra_node_num"]), 
-        action="store", 
-        default=None)
-
-
-
-    parser.add_argument("--worker_node_num", 
-        help = "Specify the number of worker nodes, default = " + str(default_config_parameters["azure_cluster"]["worker_node_num"]), 
-        action="store", 
-        default=None)
-
-    parser.add_argument("--azure_location", 
-        help = "Specify azure location, default = " + str(default_config_parameters["azure_cluster"]["azure_location"]), 
-        action="store", 
-        default=None)
-
-    parser.add_argument("--infra_vm_size", 
-        help = "Specify the azure virtual machine sku size for infrastructure node, default = " + default_config_parameters["azure_cluster"]["infra_vm_size"], 
-        action="store", 
-        default=None)
-
-    parser.add_argument("--worker_vm_size", 
-        help = "Specify the azure virtual machine sku size for worker node, default = " + default_config_parameters["azure_cluster"]["worker_vm_size"], 
-        action="store", 
-        default=None)
-
-
-    parser.add_argument("--vm_image", 
-        help = "Specify the azure virtual machine image, default = " + default_config_parameters["azure_cluster"]["vm_image"], 
-        action="store", 
-        default=None)
-
-
-    parser.add_argument("--vm_storage_sku", 
-        help = "Specify the azure storage sku, default = " + default_config_parameters["azure_cluster"]["vm_storage_sku"], 
-        action="store", 
-        default=None)
-
-
-    parser.add_argument("--vnet_range", 
-        help = "Specify the azure virtual network range, default = " + default_config_parameters["azure_cluster"]["vnet_range"], 
-        action="store", 
-        default=None)
-
-    parser.add_argument("--default_admin_username", 
-        help = "Specify the default admin username of azure virtual machine, default = " + default_config_parameters["azure_cluster"]["default_admin_username"], 
-        action="store", 
-        default=None)
-
-    parser.add_argument("--file_share_name", 
-        help = "Specify the default samba share name on azure stroage, default = " + default_config_parameters["azure_cluster"]["file_share_name"], 
-        action="store", 
-        default=None)
 
     parser.add_argument("--verbose", "-v", 
         help = "Enable verbose output during script execution", 
         action = "store_true"
         )
-
-
-
-
 
     parser.add_argument("command", 
         help = "See above for the list of valid command" )
@@ -479,9 +627,11 @@ Command:
         verbose = args.verbose
     config = init_config()
     # Cluster Config
-    config_cluster = os.path.join(dirpath,"azure_cluster_config.yaml")
+    config_cluster = os.path.join(dirpath,"azure_cluster_file.yaml")
+    # print "config_cluster === %s" %config_cluster
     if os.path.exists(config_cluster):
         tmpconfig = yaml.load(open(config_cluster)) 
+        # print "tmpconfig == %s" % tmpconfig    
         if tmpconfig is not None:
             merge_config(config, tmpconfig, verbose)
 
@@ -493,37 +643,13 @@ Command:
         if tmpconfig is not None and "azure_cluster" in tmpconfig:
             merge_config( config["azure_cluster"], tmpconfig["azure_cluster"][config["azure_cluster"]["cluster_name"]], verbose )
             
-    if (args.cluster_name is not None):
-        config["azure_cluster"]["cluster_name"] = args.cluster_name
-
-    if (args.infra_node_num is not None):
-        config["azure_cluster"]["infra_node_num"] = args.infra_node_num
-
-    if (args.worker_node_num is not None):
-        config["azure_cluster"]["worker_node_num"] = args.worker_node_num
-    if (args.azure_location is not None):
-        config["azure_cluster"]["azure_location"] = args.azure_location
-    if (args.infra_vm_size is not None):
-        config["azure_cluster"]["infra_vm_size"] = args.infra_vm_size
-    if (args.worker_vm_size is not None):
-        config["azure_cluster"]["worker_vm_size"] = args.worker_vm_size
-    if (args.vm_image is not None):
-        config["azure_cluster"]["vm_image"] = args.vm_image
-    if (args.vm_storage_sku is not None):
-        config["azure_cluster"]["vm_storage_sku"] = args.vm_storage_sku
-    if (args.vnet_range is not None):
-        config["azure_cluster"]["vnet_range"] = args.vnet_range
-    if (args.default_admin_username is not None):
-        config["azure_cluster"]["default_admin_username"] = args.default_admin_username
-    if (args.file_share_name is not None):
-        config["azure_cluster"]["file_share_name"] = args.file_share_name
-
         
     config = update_config(config)
-    print (config)
+    if verbose: 
+        print (config)
 
-    with open(config_cluster, 'w') as outfile:
-        yaml.dump(config, outfile, default_flow_style=False)
+#   with open(config_cluster, 'w') as outfile:
+#     yaml.dump(config, outfile, default_flow_style=False)
 
     if "cluster_name" not in config["azure_cluster"] or config["azure_cluster"]["cluster_name"] is None:
         print ("Cluster Name cannot be empty")
